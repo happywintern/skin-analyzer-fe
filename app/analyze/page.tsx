@@ -32,17 +32,27 @@ export default function AnalyzePage() {
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
+      // Set state first so the video element renders in the DOM
       setState("streaming");
     } catch {
       setError("Camera access denied. Please allow camera permissions and try again.");
     }
   }, []);
 
-  const stopCamera = useCallback(() => {
+  // Attach stream AFTER the video element is in the DOM
+  useEffect(() => {
+    if (state === "streaming" && streamRef.current && videoRef.current) {
+      const video = videoRef.current;
+      video.srcObject = streamRef.current;
+      video.onloadedmetadata = () => {
+        video.play().catch(() => {
+          // autoplay blocked — still fine, user interaction already happened
+        });
+      };
+    }
+  }, [state]);
+
+    const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
@@ -75,51 +85,20 @@ export default function AnalyzePage() {
     setState("analyzing");
 
     try {
-      // ─── REPLACE THIS BLOCK with your real CNN endpoint ───────────────
-      // const blob = await (await fetch(capturedImage)).blob();
-      // const formData = new FormData();
-      // formData.append("image", blob, "face.jpg");
-      // const response = await fetch("/api/analyze", {
-      //   method: "POST",
-      //   body: formData,
-      // });
-      // const result = await response.json();
-      // ──────────────────────────────────────────────────────────────────
-
-      // MOCK RESPONSE — remove when real model is connected
-      await new Promise((r) => setTimeout(r, 2500));
-      const mockResult = {
-        condition: "Acne Vulgaris",
-        confidence: 87,
-        description:
-          "Characterized by comedones, papules, and mild inflammation. Common in oily and combination skin types.",
-        ingredients: [
-          {
-            name: "Niacinamide",
-            benefit: "Reduces sebum production and minimizes pore appearance",
-            concentration: "5–10%",
-          },
-          {
-            name: "Salicylic Acid",
-            benefit: "Exfoliates inside pores and clears blackheads",
-            concentration: "0.5–2%",
-          },
-          {
-            name: "Zinc PCA",
-            benefit: "Antibacterial, balances oil and soothes redness",
-            concentration: "0.5–1%",
-          },
-          {
-            name: "Centella Asiatica",
-            benefit: "Calms inflammation and supports skin barrier repair",
-            concentration: "Use as listed",
-          },
-        ],
-      };
-      // ── end mock ──
+      const blob = await (await fetch(capturedImage)).blob();
+      const formData = new FormData();
+      formData.append("image", blob, "face.jpg");
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error("Analyze request failed");
+      }
+      const result = await response.json();
 
       // Store result in sessionStorage and navigate to results
-      sessionStorage.setItem("skinResult", JSON.stringify({ ...mockResult, image: capturedImage }));
+      sessionStorage.setItem("skinResult", JSON.stringify({ ...result, image: capturedImage }));
       router.push("/results");
     } catch {
       setError("Analysis failed. Please try again.");
