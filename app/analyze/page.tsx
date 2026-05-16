@@ -32,7 +32,10 @@ export default function AnalyzePage() {
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
-      // Set state first so the video element renders in the DOM
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
       setState("streaming");
     } catch {
       setError("Camera access denied. Please allow camera permissions and try again.");
