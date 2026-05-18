@@ -15,6 +15,8 @@ interface SkinResult {
   confidence: number;
   description: string;
   ingredients: Ingredient[];
+  status?: string;
+  top3?: { label: string; confidence: number }[];
   image?: string;
 }
 
@@ -104,6 +106,12 @@ export default function ResultsPage() {
             <h1 className="font-display text-4xl md:text-5xl font-light text-deep leading-tight">
               {result.condition}
             </h1>
+            {result.status === "uncertain" && (
+              <p className="text-sm text-bark font-light">Prediksi kurang pasti — menampilkan 3 kemungkinan teratas.</p>
+            )}
+            {result.status === "invalid" && (
+              <p className="text-sm text-blush font-light">Prediksi tidak valid. Coba ulangi pemindaian dengan pencahayaan lebih baik.</p>
+            )}
           </div>
         </div>
 
@@ -117,12 +125,29 @@ export default function ResultsPage() {
           </p>
         </div>
 
-        {/* Confidence */}
+        {/* Confidence / Top-3 */}
         <div
           className="bg-stone/40 rounded-2xl p-6 mb-8 border border-stone transition-all duration-700"
           style={{ opacity: visible ? 1 : 0, transform: visible ? "translateY(0)" : "translateY(16px)", transitionDelay: "250ms" }}
         >
-          <ConfidenceBar value={result.confidence} />
+          {result.top3 && result.top3.length > 0 ? (
+            <div>
+              <ConfidenceBar value={result.confidence ?? Math.round(result.top3[0].confidence)} />
+              <div className="mt-4">
+                <h3 className="text-sm text-bark font-light mb-2">Top 3 kemungkinan</h3>
+                <ol className="text-sm text-earth list-decimal list-inside space-y-1">
+                  {result.top3.map((t) => (
+                    <li key={t.label} className="flex items-center justify-between">
+                      <span>{t.label}</span>
+                      <span className="font-display text-sm text-deep">{Math.round(t.confidence)}%</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          ) : (
+            <ConfidenceBar value={result.confidence} />
+          )}
         </div>
 
         {/* Ingredients */}

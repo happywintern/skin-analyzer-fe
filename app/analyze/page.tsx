@@ -16,7 +16,7 @@ export default function AnalyzePage() {
   // Selection rectangle (relative to displayed image in pixels)
   const [sel, setSel] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const draggingRef = useRef<{ mode: "move" | "resize" | null; startX: number; startY: number; orig?: { x: number; y: number; w: number; h: number } } | null>(null);
-  const imgContainerRef = useRef<HTMLDivElement | null>(null);
+  const imgContainerRef = useRef<HTMLDivElement | null>(null) as React.MutableRefObject<HTMLDivElement | null>;
   const [dots, setDots] = useState(".");
   const streamRef = useRef<MediaStream | null>(null);
   const router = useRouter();
@@ -85,12 +85,12 @@ export default function AnalyzePage() {
       capturedBlobRef.current = b;
       const url = URL.createObjectURL(b);
       setCapturedImage(url);
-    }, "image/jpeg", 0.75);
+    }, "image/jpeg", 0.86);
     stopCamera();
     setState("captured");
   }, [stopCamera]);
 
-  const downscaleFileToBlob = useCallback(async (file: File, maxDim = 800, quality = 0.75) => {
+  const downscaleFileToBlob = useCallback(async (file: File, maxDim = 1024) => {
     return new Promise<Blob>((resolve, reject) => {
       const img = new Image();
       const url = URL.createObjectURL(file);
@@ -110,7 +110,7 @@ export default function AnalyzePage() {
         const ctx = c.getContext("2d");
         if (!ctx) return reject(new Error("No canvas"));
         ctx.drawImage(img, 0, 0, targetW, targetH);
-        c.toBlob((b) => { if (b) resolve(b); else reject(new Error("toBlob failed")); }, "image/jpeg", quality);
+        c.toBlob((b) => { if (b) resolve(b); else reject(new Error("toBlob failed")); }, "image/jpeg", 0.86);
       };
       img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
       img.src = url;
@@ -121,7 +121,7 @@ export default function AnalyzePage() {
     const f = file ?? (fileInputRef.current?.files?.[0] ?? null);
     if (!f) return;
     try {
-      const blob = await downscaleFileToBlob(f, 800, 0.75);
+      const blob = await downscaleFileToBlob(f, 1024);
       // revoke previous URL
       try { URL.revokeObjectURL(capturedImage ?? ""); } catch {}
       capturedBlobRef.current = blob;
@@ -196,10 +196,29 @@ export default function AnalyzePage() {
         throw new Error("Analyze request failed");
       }
       const result = await response.json();
-      
 
-      // Store result in sessionStorage and navigate to results
-      sessionStorage.setItem("skinResult", JSON.stringify({ ...result, image: capturedImage }));
+      // Handle server-side validity
+      if (result.status === "invalid") {
+        setError("Prediksi tidak valid. Coba ambil foto lain dengan pencahayaan lebih baik.");
+        setState("captured");
+        return;
+      }
+
+      // Create a display image for results: use the cropped blob (or full captured image)
+      let displayUrl = capturedImage;
+      try {
+        // if we created a cropped blob earlier, reuse it; otherwise use capturedBlobRef
+        const sourceBlobForDisplay = blob ?? (capturedBlobRef.current ?? await (await fetch(capturedImage)).blob());
+        // revoke previous URL if any
+        try { URL.revokeObjectURL(displayUrl ?? ""); } catch {}
+        displayUrl = URL.createObjectURL(sourceBlobForDisplay);
+      } catch {
+        // fallback to existing capturedImage
+        displayUrl = capturedImage;
+      }
+
+      // Store result (include highlighted/cropped image) and navigate to results
+      sessionStorage.setItem("skinResult", JSON.stringify({ ...result, image: displayUrl }));
       router.push("/results");
     } catch {
       setError("Analisis Gagal. Silakan coba lagi.");
@@ -300,6 +319,7 @@ export default function AnalyzePage() {
             {error && (
               <p className="text-sm text-blush mb-6 bg-blush/10 rounded-xl px-4 py-3">{error}</p>
             )}
+            <div className="gap-2 flex flex-col sm:flex-row items-center justify-center">
             <button
               onClick={startCamera}
               className="bg-deep text-cream px-10 py-4 text-sm tracking-[0.15em] uppercase font-light hover:bg-earth transition-all duration-300 rounded-full"
@@ -308,15 +328,17 @@ export default function AnalyzePage() {
             </button>
             <button
               onClick={openDeviceCamera}
-              className="ml-4 bg-stone text-deep px-6 py-4 text-sm tracking-[0.12em] uppercase font-light hover:bg-stone/90 transition-all duration-300 rounded-full"
+              className="bg-stone text-deep px-6 py-4 text-sm tracking-[0.12em] uppercase font-light hover:bg-stone/90 transition-all duration-300 rounded-full"
             >
-              Use device camera
+              Select Image
             </button>
+
+            </div>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
-              capture="user"
+              accept="image/*, application/vnd.apple.raw-image"
+              // capture="user"
               onChange={(e) => onFilePicked(e.target.files?.[0] ?? null)}
               className="hidden"
             />
@@ -381,7 +403,7 @@ export default function AnalyzePage() {
               <img src={capturedImage} alt="Captured face" className="w-full h-full object-cover" />
               {/* Selection overlay container */}
               <div
-                ref={(el) => (imgContainerRef.current = el)}
+                ref={imgContainerRef}
                 className="absolute inset-0"
                 onPointerDown={onStartDrag}
                 onPointerMove={onPointerMoveImage}
