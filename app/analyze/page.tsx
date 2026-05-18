@@ -12,9 +12,15 @@ export default function AnalyzePage() {
   const [state, setState] = useState<CameraState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const capturedBlobRef = useRef<Blob | null>(null);
+  // Selection rectangle (relative to displayed image in pixels)
+  const [sel, setSel] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const draggingRef = useRef<{ mode: "move" | "resize" | null; startX: number; startY: number; orig?: { x: number; y: number; w: number; h: number } } | null>(null);
+  const imgContainerRef = useRef<HTMLDivElement | null>(null);
   const [dots, setDots] = useState(".");
   const streamRef = useRef<MediaStream | null>(null);
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Animate loading dots
   useEffect(() => {
@@ -38,7 +44,7 @@ export default function AnalyzePage() {
       }
       setState("streaming");
     } catch {
-      setError("Camera access denied. Please allow camera permissions and try again.");
+      setError("Akses kamera ditolak. Izinkan akses kamera lalu coba lagi.");
     }
   }, []);
 
@@ -72,13 +78,70 @@ export default function AnalyzePage() {
     ctx.translate(canvas.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    setCapturedImage(dataUrl);
+    // create a resized blob from canvas to reduce memory before storing
+    canvas.toBlob((b) => {
+      if (!b) return;
+      try { URL.revokeObjectURL(capturedImage ?? ""); } catch {}
+      capturedBlobRef.current = b;
+      const url = URL.createObjectURL(b);
+      setCapturedImage(url);
+    }, "image/jpeg", 0.75);
     stopCamera();
     setState("captured");
   }, [stopCamera]);
 
+  const downscaleFileToBlob = useCallback(async (file: File, maxDim = 800, quality = 0.75) => {
+    return new Promise<Blob>((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const { width, height } = img;
+        let targetW = width;
+        let targetH = height;
+        if (Math.max(width, height) > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          targetW = Math.round(width * scale);
+          targetH = Math.round(height * scale);
+        }
+        const c = document.createElement("canvas");
+        c.width = targetW;
+        c.height = targetH;
+        const ctx = c.getContext("2d");
+        if (!ctx) return reject(new Error("No canvas"));
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        c.toBlob((b) => { if (b) resolve(b); else reject(new Error("toBlob failed")); }, "image/jpeg", quality);
+      };
+      img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }, []);
+
+  const onFilePicked = useCallback(async (file?: File | null) => {
+    const f = file ?? (fileInputRef.current?.files?.[0] ?? null);
+    if (!f) return;
+    try {
+      const blob = await downscaleFileToBlob(f, 800, 0.75);
+      // revoke previous URL
+      try { URL.revokeObjectURL(capturedImage ?? ""); } catch {}
+      capturedBlobRef.current = blob;
+      const url = URL.createObjectURL(blob);
+      setCapturedImage(url);
+      setState("captured");
+    } catch (err) {
+      setError("Gagal memproses gambar. Coba file lain.");
+    }
+  }, [downscaleFileToBlob, capturedImage]);
+
+  const openDeviceCamera = useCallback(() => {
+    // prefer front camera for selfie mode
+    if (!fileInputRef.current) return;
+    fileInputRef.current.click();
+  }, []);
+
   const retake = useCallback(() => {
+    try { URL.revokeObjectURL(capturedImage ?? ""); } catch {}
+    capturedBlobRef.current = null;
     setCapturedImage(null);
     setState("idle");
   }, []);
@@ -88,9 +151,43 @@ export default function AnalyzePage() {
     setState("analyzing");
 
     try {
-      const blob = await (await fetch(capturedImage)).blob();
+      // If user selected an area, crop that portion; otherwise send full image
+      let blob: Blob;
+      if (sel) {
+        // draw image into an offscreen canvas at natural resolution and crop using scaled coords
+        const sourceBlob = capturedBlobRef.current ?? await (await fetch(capturedImage)).blob();
+        const img = await createImageBitmap(sourceBlob);
+        const off = document.createElement("canvas");
+        const naturalW = img.width;
+        const naturalH = img.height;
+        off.width = sel.w;
+        off.height = sel.h;
+        const ctx = off.getContext("2d");
+        if (!ctx) throw new Error("No canvas context");
+
+        // Need to map displayed selection coords to natural image coords
+        // To compute scale, create a temporary img element to get displayed size
+        const tmp = document.createElement("img");
+        tmp.src = capturedImage;
+        await new Promise((r) => (tmp.onload = r));
+        const dispW = tmp.width;
+        const dispH = tmp.height;
+        const scaleX = naturalW / dispW;
+        const scaleY = naturalH / dispH;
+
+        const sx = Math.round(sel.x * scaleX);
+        const sy = Math.round(sel.y * scaleY);
+        const sw = Math.round(sel.w * scaleX);
+        const sh = Math.round(sel.h * scaleY);
+
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, off.width, off.height);
+        blob = await new Promise<Blob>((res) => off.toBlob((b) => res(b as Blob), "image/jpeg", 0.92));
+      } else {
+        blob = capturedBlobRef.current ?? await (await fetch(capturedImage)).blob();
+      }
+
       const formData = new FormData();
-      formData.append("image", blob, "face.jpg");
+      formData.append("image", blob, "crop.jpg");
       const response = await fetch("/api/analyze", {
         method: "POST",
         body: formData,
@@ -99,15 +196,72 @@ export default function AnalyzePage() {
         throw new Error("Analyze request failed");
       }
       const result = await response.json();
+      
 
       // Store result in sessionStorage and navigate to results
       sessionStorage.setItem("skinResult", JSON.stringify({ ...result, image: capturedImage }));
       router.push("/results");
     } catch {
-      setError("Analysis failed. Please try again.");
+      setError("Analisis Gagal. Silakan coba lagi.");
       setState("captured");
     }
   }, [capturedImage, router]);
+
+  // Mouse/touch handlers for selection rectangle
+  const onStartDrag = (e: React.PointerEvent) => {
+    if (!e.currentTarget) return;
+    const target = e.currentTarget as HTMLDivElement;
+    const rect = target.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    // if clicking inside existing selection, start move using existing sel
+    if (sel && x >= sel.x && x <= sel.x + sel.w && y >= sel.y && y <= sel.y + sel.h) {
+      draggingRef.current = { mode: "move", startX: e.clientX, startY: e.clientY, orig: { ...sel } };
+    } else {
+      // start a new selection at this point
+      const startW = Math.max(80, Math.floor(rect.width * 0.25));
+      const startH = Math.max(80, Math.floor(rect.height * 0.25));
+      const startX = Math.max(0, Math.min(x - startW / 2, rect.width - startW));
+      const startY = Math.max(0, Math.min(y - startH / 2, rect.height - startH));
+      setSel({ x: startX, y: startY, w: startW, h: startH });
+      draggingRef.current = { mode: "move", startX: e.clientX, startY: e.clientY, orig: { x: startX, y: startY, w: startW, h: startH } };
+    }
+    (e.target as Element).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMoveImage = (e: React.PointerEvent) => {
+    if (!draggingRef.current || !sel) return;
+    const d = draggingRef.current;
+    if (!d.orig) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (d.mode === "move") {
+      const cw = imgContainerRef.current?.clientWidth ?? (e.currentTarget as HTMLDivElement).clientWidth;
+      const ch = imgContainerRef.current?.clientHeight ?? (e.currentTarget as HTMLDivElement).clientHeight;
+      setSel((s) => s ? ({ ...s, x: Math.max(0, Math.min(d.orig!.x + dx, cw - d.orig!.w)), y: Math.max(0, Math.min(d.orig!.y + dy, ch - d.orig!.h)) }) : s);
+    }
+    if (d.mode === "resize") {
+      const cw = imgContainerRef.current?.clientWidth ?? (e.currentTarget as HTMLDivElement).clientWidth;
+      const ch = imgContainerRef.current?.clientHeight ?? (e.currentTarget as HTMLDivElement).clientHeight;
+      const minW = 40;
+      const minH = 40;
+      const newW = Math.max(minW, Math.min(d.orig!.w + dx, cw - d.orig!.x));
+      const newH = Math.max(minH, Math.min(d.orig!.h + dy, ch - d.orig!.y));
+      setSel((s) => s ? ({ ...s, w: newW, h: newH }) : s);
+    }
+  };
+
+  const onEndDrag = (e: React.PointerEvent) => {
+    if (draggingRef.current) draggingRef.current = null;
+    try { (e.target as Element).releasePointerCapture(e.pointerId); } catch {}
+  };
+
+  const onStartResize = (corner: "br") => (e: React.PointerEvent) => {
+    if (!sel) return;
+    draggingRef.current = { mode: "resize", startX: e.clientX, startY: e.clientY, orig: { ...sel } };
+    (e.target as Element).setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  };
 
   // Cleanup on unmount
   useEffect(() => () => stopCamera(), [stopCamera]);
@@ -139,10 +293,10 @@ export default function AnalyzePage() {
                 <circle cx="12" cy="13" r="4" />
               </svg>
             </div>
-            <h2 className="font-display text-4xl font-light text-deep mb-4">Ready to scan</h2>
-            <p className="font-body font-light text-earth text-sm mb-10 leading-relaxed">
-              We'll open your camera. Make sure you're in good lighting with your face clearly visible.
-            </p>
+              <h2 className="font-display text-4xl font-light text-deep mb-4">Siap memindai</h2>
+              <p className="font-body font-light text-earth text-sm mb-10 leading-relaxed">
+                Kami akan membuka kamera Anda. Pastikan pencahayaan baik dan wajah terlihat jelas.
+              </p>
             {error && (
               <p className="text-sm text-blush mb-6 bg-blush/10 rounded-xl px-4 py-3">{error}</p>
             )}
@@ -152,6 +306,20 @@ export default function AnalyzePage() {
             >
               Open camera
             </button>
+            <button
+              onClick={openDeviceCamera}
+              className="ml-4 bg-stone text-deep px-6 py-4 text-sm tracking-[0.12em] uppercase font-light hover:bg-stone/90 transition-all duration-300 rounded-full"
+            >
+              Use device camera
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              onChange={(e) => onFilePicked(e.target.files?.[0] ?? null)}
+              className="hidden"
+            />
           </div>
         )}
 
@@ -159,7 +327,7 @@ export default function AnalyzePage() {
         {state === "streaming" && (
           <div className="animate-fade-in opacity-0-init w-full max-w-md" style={{ animationFillMode: "forwards" }}>
             <p className="text-center text-xs tracking-[0.2em] uppercase text-bark mb-4 font-light">
-              Position your face in the frame
+              Posisikan wajah Anda di dalam bingkai
             </p>
             <div className="relative rounded-2xl overflow-hidden bg-deep aspect-[3/4] w-full max-w-xs mx-auto">
               <video
@@ -188,7 +356,7 @@ export default function AnalyzePage() {
                 onClick={retake}
                 className="text-xs text-bark font-light tracking-wider hover:text-earth transition-colors"
               >
-                Cancel
+               Batal
               </button>
               <button
                 onClick={capturePhoto}
@@ -206,11 +374,32 @@ export default function AnalyzePage() {
         {state === "captured" && capturedImage && (
           <div className="animate-fade-in opacity-0-init w-full max-w-xs mx-auto text-center" style={{ animationFillMode: "forwards" }}>
             <p className="text-xs tracking-[0.2em] uppercase text-bark mb-4 font-light">
-              Looking good?
+              Tandai bagian yang ingin dianalisis
             </p>
-            <div className="rounded-2xl overflow-hidden aspect-[3/4] w-full bg-stone">
+            <div className="rounded-2xl overflow-hidden aspect-[3/4] w-full bg-stone relative" style={{ touchAction: "none" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={capturedImage} alt="Captured face" className="w-full h-full object-cover" />
+              {/* Selection overlay container */}
+              <div
+                ref={(el) => (imgContainerRef.current = el)}
+                className="absolute inset-0"
+                onPointerDown={onStartDrag}
+                onPointerMove={onPointerMoveImage}
+                onPointerUp={onEndDrag}
+                onPointerCancel={onEndDrag}
+              >
+                {sel && (
+                  <div
+                    style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }}
+                    className="absolute border-2 border-earth bg-earth/20 touch-none"
+                  >
+                    <div
+                      onPointerDown={onStartResize("br")}
+                      className="absolute right-0 bottom-0 w-4 h-4 bg-earth/80"
+                    />
+                  </div>
+                )}
+              </div>
             </div>
             {error && (
               <p className="text-sm text-blush mt-4 bg-blush/10 rounded-xl px-4 py-3">{error}</p>
@@ -220,13 +409,13 @@ export default function AnalyzePage() {
                 onClick={retake}
                 className="border border-stone text-earth px-8 py-3 text-sm tracking-[0.12em] uppercase font-light hover:border-earth transition-all rounded-full"
               >
-                Retake
+               Ambil lagi
               </button>
               <button
                 onClick={analyzePhoto}
                 className="bg-deep text-cream px-8 py-3 text-sm tracking-[0.12em] uppercase font-light hover:bg-earth transition-all rounded-full"
               >
-                Analyze →
+                Crop & Analisis →
               </button>
             </div>
           </div>
@@ -239,12 +428,12 @@ export default function AnalyzePage() {
               <div className="absolute inset-0 rounded-full border-2 border-stone animate-spin" style={{ borderTopColor: "var(--earth)", animationDuration: "1.2s" }} />
               <div className="absolute inset-3 rounded-full bg-stone/50" />
             </div>
-            <h2 className="font-display text-4xl font-light text-deep mb-3">
-              Analyzing{dots}
-            </h2>
-            <p className="font-body font-light text-earth text-sm">
-              Our CNN model is reading your skin
-            </p>
+              <h2 className="font-display text-4xl font-light text-deep mb-3">
+                Menganalisis{dots}
+              </h2>
+              <p className="font-body font-light text-earth text-sm">
+                Model CNN kami sedang membaca kondisi kulit Anda
+              </p>
           </div>
         )}
       </div>

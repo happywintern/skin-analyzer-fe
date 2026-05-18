@@ -5,23 +5,23 @@ import Link from "next/link";
 const steps = [
   {
     number: "01",
-    title: "Find good lighting",
-    desc: "Natural daylight or a well-lit room works best. Avoid harsh shadows or backlighting — your skin tells a clearer story in even light.",
+    title: "Cari pencahayaan yang baik",
+    desc: "Cahaya alami atau ruangan yang terang bekerja paling baik. Hindari bayangan tajam atau backlight — kulit terlihat lebih jelas dengan pencahayaan merata.",
   },
   {
     number: "02",
-    title: "Position your face",
-    desc: "Center your face in the frame. The model works best when your full face is visible — forehead, cheeks, nose, and chin.",
+    title: "Posisikan wajah Anda",
+    desc: "Pusatkan wajah di bingkai. Model bekerja optimal jika seluruh wajah terlihat — dahi, pipi, hidung, dan dagu.",
   },
   {
     number: "03",
-    title: "Take the photo",
-    desc: "Stay still and tap the capture button. A clean, blur-free photo gives the CNN model the detail it needs to read your skin accurately.",
+    title: "Ambil foto",
+    desc: "Diamkan dan ketuk tombol ambil. Foto yang bersih tanpa blur memberi model detail yang diperlukan untuk pembacaan akurat.",
   },
   {
     number: "04",
-    title: "Get your results",
-    desc: "In seconds, you'll see your skin condition, a confidence score, and a curated list of ingredients proven to help treat it.",
+    title: "Dapatkan hasil",
+    desc: "Dalam hitungan detik, Anda akan melihat kondisi kulit, skor keyakinan, dan daftar bahan yang direkomendasikan.",
   },
 ];
 
@@ -47,12 +47,12 @@ export default function TutorialPage() {
           className="animate-fade-up opacity-0-init text-center mb-16"
           style={{ animationFillMode: "forwards" }}
         >
-          <h1 className="font-display text-5xl md:text-6xl font-light text-deep mb-4">
-            Before we begin
-          </h1>
-          <p className="font-body font-light text-earth text-base leading-relaxed">
-            Four simple steps to your most accurate reading.
-          </p>
+            <h1 className="font-display text-5xl md:text-6xl font-light text-deep mb-4">
+              Sebelum memulai
+            </h1>
+            <p className="font-body font-light text-earth text-base leading-relaxed">
+              Empat langkah sederhana untuk hasil yang paling akurat.
+            </p>
         </div>
 
         {/* Steps */}
@@ -87,13 +87,13 @@ export default function TutorialPage() {
           style={{ animationFillMode: "forwards", animationDelay: "600ms" }}
         >
           <p className="text-xs tracking-[0.15em] uppercase text-bark mb-3 font-light">
-            Quick tips
+            Tips singkat
           </p>
           <ul className="space-y-2">
             {[
-              "Remove glasses before scanning",
-              "Clean face preferred — skip heavy makeup",
-              "Hold phone 25–35 cm from your face",
+              "Lepas kacamata sebelum pemindaian",
+              "Wajah bersih lebih disarankan — hindari riasan tebal",
+              "Jaga jarak ponsel 25–35 cm dari wajah",
             ].map((tip) => (
               <li key={tip} className="flex items-start gap-3 text-sm text-earth font-light">
                 <span className="text-sage mt-0.5">✓</span>
